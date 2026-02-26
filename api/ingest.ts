@@ -222,7 +222,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     await new Promise<void>((resolve, reject) => {
       connection.execute({
         sqlText: sql,
-        binds,
+        binds: binds as unknown as snowflake.Bind[],
         complete: (err) => {
           if (err) reject(err);
           else resolve();
