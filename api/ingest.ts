@@ -74,23 +74,48 @@ function getConnection(): snowflake.Connection {
   const account = process.env.SNOWFLAKE_ACCOUNT;
   const user = process.env.SNOWFLAKE_USER;
   const password = process.env.SNOWFLAKE_PASSWORD;
+  const privateKeyRaw = process.env.SNOWFLAKE_PRIVATE_KEY;
+  const privateKeyPass = process.env.SNOWFLAKE_PRIVATE_KEY_PASS;
   const warehouse = process.env.SNOWFLAKE_WAREHOUSE;
   const database = process.env.SNOWFLAKE_DATABASE;
   const schema = process.env.SNOWFLAKE_SCHEMA;
 
-  if (!account || !user || !password || !warehouse || !database || !schema) {
+  if (!account || !user || !warehouse || !database || !schema) {
     throw new Error(
-      'Missing Snowflake config: SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PASSWORD, SNOWFLAKE_WAREHOUSE, SNOWFLAKE_DATABASE, SNOWFLAKE_SCHEMA must be set'
+      'Missing Snowflake config: SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_WAREHOUSE, SNOWFLAKE_DATABASE, SNOWFLAKE_SCHEMA must be set'
     );
   }
 
-  return snowflake.createConnection({
+  const useKeyPair = Boolean(privateKeyRaw?.trim());
+
+  if (!useKeyPair && !password) {
+    throw new Error(
+      'Set either SNOWFLAKE_PASSWORD or SNOWFLAKE_PRIVATE_KEY for Snowflake authentication'
+    );
+  }
+
+  const base = {
     account,
     username: user,
-    password,
     warehouse,
     database,
     schema,
+  };
+
+  if (useKeyPair) {
+    // PEM in env often has newlines as literal \n; normalize for the SDK
+    const privateKey = privateKeyRaw!.replace(/\\n/g, '\n').trim();
+    return snowflake.createConnection({
+      ...base,
+      authenticator: 'SNOWFLAKE_JWT',
+      privateKey,
+      ...(privateKeyPass ? { privateKeyPass } : {}),
+    });
+  }
+
+  return snowflake.createConnection({
+    ...base,
+    password: password!,
   });
 }
 
@@ -185,7 +210,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     await new Promise<void>((resolve, reject) => {
       connection.execute({
         sqlText: sql,
-        binds,
+        binds: binds as snowflake.Bind[],
         complete: (err) => {
           if (err) reject(err);
           else resolve();
