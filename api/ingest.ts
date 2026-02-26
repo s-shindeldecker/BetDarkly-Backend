@@ -18,12 +18,22 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import snowflake from 'snowflake-sdk';
 
-const ALLOWED_ORIGINS = new Set([
-  'https://cap1-betdarkly.lovable.app',
-  'https://id-preview--74ea028b-83e5-4ba8-b5f6-d7b551b4f447.lovable.app',
+const ALLOWED_ORIGINS_EXACT = new Set([
   'http://localhost:5173',
   'http://localhost:8080',
 ]);
+
+/** Allow any https origin on Lovable's app and project domains. */
+function isAllowedOrigin(origin: string): boolean {
+  if (ALLOWED_ORIGINS_EXACT.has(origin)) return true;
+  if (!origin.startsWith('https://')) return false;
+  try {
+    const host = new URL(origin).hostname.toLowerCase();
+    return host.endsWith('.lovable.app') || host.endsWith('.lovableproject.com');
+  } catch {
+    return false;
+  }
+}
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
@@ -31,7 +41,7 @@ const CORS_HEADERS = {
 } as const;
 
 function setCors(res: VercelResponse, origin: string | undefined): void {
-  if (origin && ALLOWED_ORIGINS.has(origin)) {
+  if (origin && isAllowedOrigin(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
   res.setHeader('Access-Control-Allow-Headers', CORS_HEADERS['Access-Control-Allow-Headers']);
