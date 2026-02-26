@@ -191,8 +191,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       });
     });
 
-    const oneRow = '(?, ?, ?, ?, ?, ?, ?, PARSE_JSON(?), PARSE_JSON(?))';
-    const valuesClause = events.map(() => oneRow).join(', ');
+    const payload = events.map((ev) => ({
+      message_id: ev.message_id,
+      event_timestamp: ev.timestamp,
+      event_type: ev.event_type,
+      event_name: ev.event_name,
+      user_id: ev.user_id ?? null,
+      anonymous_id: ev.anonymous_id ?? null,
+      session_id: ev.session_id ?? null,
+      properties: ev.properties ?? {},
+      context: ev.context ?? {},
+    }));
     const sql = `
     INSERT INTO ANALYTICS_EVENTS (
       MESSAGE_ID,
@@ -204,25 +213,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       SESSION_ID,
       PROPERTIES,
       CONTEXT
-    ) VALUES ${valuesClause}
+    )
+    SELECT
+      f.value:message_id::VARCHAR,
+      f.value:event_timestamp::TIMESTAMP_NTZ,
+      f.value:event_type::VARCHAR,
+      f.value:event_name::VARCHAR,
+      f.value:user_id::VARCHAR,
+      f.value:anonymous_id::VARCHAR,
+      f.value:session_id::VARCHAR,
+      f.value:properties,
+      f.value:context
+    FROM TABLE(FLATTEN(INPUT => PARSE_JSON(?))) f
   `;
-
-    const binds = events.flatMap((ev) => [
-      ev.message_id,
-      ev.timestamp,
-      ev.event_type,
-      ev.event_name,
-      ev.user_id ?? null,
-      ev.anonymous_id ?? null,
-      ev.session_id ?? null,
-      JSON.stringify(ev.properties ?? {}),
-      JSON.stringify(ev.context ?? {}),
-    ]);
 
     await new Promise<void>((resolve, reject) => {
       connection.execute({
         sqlText: sql,
-        binds: binds as unknown as snowflake.Bind[],
+        binds: [JSON.stringify(payload)] as unknown as snowflake.Bind[],
         complete: (err) => {
           if (err) reject(err);
           else resolve();
