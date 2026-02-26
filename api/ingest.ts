@@ -236,7 +236,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     });
 
     res.status(200).json({ inserted: events.length });
-  } catch {
+  } catch (err) {
+    console.error('[ingest]', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 }
