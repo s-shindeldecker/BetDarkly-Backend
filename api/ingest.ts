@@ -191,6 +191,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       });
     });
 
+    const oneRow = '(?, ?, ?, ?, ?, ?, ?, PARSE_JSON(?), PARSE_JSON(?))';
+    const valuesClause = events.map(() => oneRow).join(', ');
     const sql = `
     INSERT INTO ANALYTICS_EVENTS (
       MESSAGE_ID,
@@ -202,10 +204,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       SESSION_ID,
       PROPERTIES,
       CONTEXT
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, PARSE_JSON(?), PARSE_JSON(?))
+    ) VALUES ${valuesClause}
   `;
 
-    const binds = events.map((ev) => [
+    const binds = events.flatMap((ev) => [
       ev.message_id,
       ev.timestamp,
       ev.event_type,
@@ -220,7 +222,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     await new Promise<void>((resolve, reject) => {
       connection.execute({
         sqlText: sql,
-        binds: binds as unknown as snowflake.Bind[],
+        binds,
         complete: (err) => {
           if (err) reject(err);
           else resolve();
