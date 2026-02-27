@@ -40,6 +40,32 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 } as const;
 
+/**
+ * Require full ISO 8601 date-time with timezone so we never interpret in server/session TZ.
+ * Matches: YYYY-MM-DDTHH:mm:ss[.frac](Z|±HH:MM) — colon in offset required.
+ */
+const TIMESTAMP_WITH_TZ =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * Normalizes an event timestamp to UTC and returns ISO 8601 with Z.
+ * Rejects ambiguous timestamps (no offset) to avoid silent coercion by Snowflake session TZ.
+ * Uses native Date: parsing is UTC-safe when input includes Z or ±HH:MM.
+ */
+function normalizeTimestampToUTC(ts: string): string {
+  const trimmed = ts.trim();
+  if (!TIMESTAMP_WITH_TZ.test(trimmed)) {
+    throw new Error(
+      'timestamp must include a timezone offset (Z or ±HH:MM). Ambiguous timestamps are rejected.'
+    );
+  }
+  const date = new Date(trimmed);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error('timestamp is not a valid date');
+  }
+  return date.toISOString();
+}
+
 function setCors(res: VercelResponse, origin: string | undefined): void {
   if (origin && isAllowedOrigin(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
@@ -70,6 +96,12 @@ function validateEvent(e: unknown, index: number): e is IngestEvent {
   }
   if (typeof o.timestamp !== 'string' || !o.timestamp.trim()) {
     throw new Error(`events[${index}]: timestamp must be a non-empty string`);
+  }
+  // Require timezone offset so we never interpret in server/session TZ (no silent coercion).
+  if (!TIMESTAMP_WITH_TZ.test(o.timestamp.trim())) {
+    throw new Error(
+      `events[${index}]: timestamp must include a timezone offset (Z or ±HH:MM). Ambiguous timestamps are rejected.`
+    );
   }
   if (typeof o.event_type !== 'string' || !o.event_type.trim()) {
     throw new Error(`events[${index}]: event_type must be a non-empty string`);
@@ -191,17 +223,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       });
     });
 
-    const payload = events.map((ev) => ({
-      message_id: ev.message_id,
-      event_timestamp: ev.timestamp,
-      event_type: ev.event_type,
-      event_name: ev.event_name,
-      user_id: ev.user_id ?? null,
-      anonymous_id: ev.anonymous_id ?? null,
-      session_id: ev.session_id ?? null,
-      properties: ev.properties ?? {},
-      context: ev.context ?? {},
-    }));
+    // Normalize each timestamp to UTC ISO 8601 with Z; fail with 400 if any are invalid.
+    let payload: Array<{
+      message_id: string;
+      event_timestamp: string;
+      event_type: string;
+      event_name: string;
+      user_id: string | null;
+      anonymous_id: string | null;
+      session_id: string | null;
+      properties: Record<string, unknown>;
+      context: Record<string, unknown>;
+    }>;
+    try {
+      payload = events.map((ev) => ({
+        message_id: ev.message_id,
+        event_timestamp: normalizeTimestampToUTC(ev.timestamp),
+        event_type: ev.event_type,
+        event_name: ev.event_name,
+        user_id: ev.user_id ?? null,
+        anonymous_id: ev.anonymous_id ?? null,
+        session_id: ev.session_id ?? null,
+        properties: ev.properties ?? {},
+        context: ev.context ?? {},
+      }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Invalid timestamp';
+      res.status(400).json({ error: message });
+      return;
+    }
     const sql = `
     INSERT INTO ANALYTICS_EVENTS (
       MESSAGE_ID,
